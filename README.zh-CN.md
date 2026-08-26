@@ -36,21 +36,35 @@ ReproPilot 在本地运行，不会自动 commit、push 或创建 PR。
 
 ReproPilot 会在当前仓库中运行命令，也可能创建或修改文件。运行前请检查工作区状态，或者使用单独的分支。
 
-## 安装
+## 快速开始
 
-安装 Pi：
+使用 npm 安装 Pi：
+
+```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+```
+
+`--ignore-scripts` 会在安装过程中禁用依赖项生命周期脚本。Pi 在正常的 npm 安装过程中不需要安装脚本。
+
+也可以使用安装程序：
 
 ```bash
 curl -fsSL https://pi.dev/install.sh | sh
 ```
 
-也可以使用 npm：
+使用 API 密钥进行身份验证：
 
 ```bash
-npm install -g @earendil-works/pi-coding-agent
+export ANTHROPIC_API_KEY=sk-ant-...
+pi
 ```
 
-第一次运行 `pi` 时，使用 `/login` 配置模型提供商。
+或者使用已有订阅：
+
+```text
+pi
+/login  # 然后选择提供商
+```
 
 然后安装一次 ReproPilot：
 
@@ -133,12 +147,3 @@ repro:triage evidence:0 test:not_started fix:not_started
 - 需要用户提前打开匹配的本地仓库。
 - 目标项目的依赖和测试必须能够在本地运行。
 - 不提供云端隔离环境，不自动 commit、push 或创建 PR。
-
-## 本地开发
-
-```bash
-npm install
-npm test
-npm run typecheck
-npm run check
-```

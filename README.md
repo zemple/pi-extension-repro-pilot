@@ -36,21 +36,35 @@ The target repository is not restricted to a programming language or test framew
 
 ReproPilot runs commands and may create or edit files in the current repository. Check your working tree first or use a separate branch.
 
-## Install
+## Quick start
 
-Install Pi:
+Install Pi with npm:
+
+```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+```
+
+`--ignore-scripts` disables dependency lifecycle scripts during installation. Pi does not require install scripts for normal npm installs.
+
+Installer alternative:
 
 ```bash
 curl -fsSL https://pi.dev/install.sh | sh
 ```
 
-Or install it with npm:
+Authenticate with an API key:
 
 ```bash
-npm install -g @earendil-works/pi-coding-agent
+export ANTHROPIC_API_KEY=sk-ant-...
+pi
 ```
 
-Run `pi`, then use `/login` the first time to configure a model provider.
+Or use an existing subscription:
+
+```text
+pi
+/login  # Then select provider
+```
 
 Install ReproPilot once:
 
@@ -133,12 +147,3 @@ Read `Outcome` and `Verification` first. Use `Evidence Details` when you need th
 - Requires the user to open the matching local repository first.
 - Requires the target project's dependencies and tests to run locally.
 - Provides no cloud sandbox and does not automatically commit, push, or open a pull request.
-
-## Development
-
-```bash
-npm install
-npm test
-npm run typecheck
-npm run check
-```
