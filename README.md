@@ -25,6 +25,19 @@ Load issue → Triage → Reproduce → Add a failing regression test
 
 Reading code is not proof of reproduction. ReproPilot requires evidence from executed commands or tests.
 
+## Architecture
+
+ReproPilot is a Pi package with four small layers:
+
+| Path | Responsibility |
+| --- | --- |
+| `extensions/repro-workflow/` | Connects ReproPilot to Pi: `/repro`, custom tools, session events, and TUI status |
+| `skills/repro-workflow/` | Gives the model the step-by-step reproduction procedure |
+| `src/core/` | Enforces workflow state, evidence rules, persistence validation, and report generation without depending on Pi |
+| `src/github.ts` | Loads and validates the GitHub issue and verifies the current repository |
+
+Pi provides the model loop and built-in repository tools. ReproPilot adds only the issue-reproduction workflow and its deterministic evidence gates.
+
 ## Requirements
 
 - Node.js 20.19 or later.
@@ -83,6 +96,8 @@ git clone https://github.com/OWNER/REPOSITORY.git
 cd REPOSITORY
 pi
 ```
+
+Start Pi normally. Do not add `--no-skills`: it disables ReproPilot's workflow skill. ReproPilot does not include any unrelated skills.
 
 Replace the uppercase placeholders, then run this inside Pi:
 

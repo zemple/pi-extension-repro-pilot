@@ -25,6 +25,19 @@ ReproPilot 在本地运行，不会自动 commit、push 或创建 PR。
 
 仅仅阅读代码不能证明问题已复现。ReproPilot 必须获得实际运行命令或测试产生的证据。
 
+## 架构
+
+ReproPilot 是一个由四层组成的 Pi package：
+
+| 路径 | 职责 |
+| --- | --- |
+| `extensions/repro-workflow/` | 接入 Pi：注册 `/repro`、自定义工具、Session 事件和 TUI 状态 |
+| `skills/repro-workflow/` | 告诉模型应该按照什么步骤复现问题 |
+| `src/core/` | 不依赖 Pi，负责工作流状态、证据规则、持久化验证和报告生成 |
+| `src/github.ts` | 加载并验证 GitHub issue，同时检查当前仓库是否匹配 |
+
+Pi 提供模型循环和内置仓库工具；ReproPilot 只增加 issue 复现流程和由代码强制执行的证据门槛。
+
 ## 使用要求
 
 - Node.js 20.19 或更高版本。
@@ -83,6 +96,8 @@ git clone https://github.com/OWNER/REPOSITORY.git
 cd REPOSITORY
 pi
 ```
+
+请直接正常启动 Pi，不要添加 `--no-skills`：它会禁用 ReproPilot 自己的 workflow skill。ReproPilot 不包含任何无关 skill。
 
 替换其中的大写占位符，然后在 Pi 中运行：
 
