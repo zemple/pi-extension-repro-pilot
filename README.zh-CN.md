@@ -94,8 +94,14 @@ pi install https://github.com/zemple/repro-pilot
 ```bash
 git clone https://github.com/OWNER/REPOSITORY.git
 cd REPOSITORY
+git status
+git switch -c test-repro-pilot
 pi
 ```
+
+`git status` 用来检查当前是否有尚未提交的修改。`git switch -c test-repro-pilot` 会从当前位置创建一个新分支并立即切换过去，让 ReproPilot 创建的测试和可能产生的源码修改与主分支隔离。分支名可以自行修改。这条命令等价于旧写法 `git checkout -b test-repro-pilot`，但 `switch` 的用途更明确，只负责分支操作。
+
+创建分支不会清理或丢弃尚未提交的修改。如果 `git status` 显示了需要保留的改动，请先提交，或使用 `git stash` 临时保存，再运行 ReproPilot。
 
 请直接正常启动 Pi，不要添加 `--no-skills`：它会禁用 ReproPilot 自己的 workflow skill。ReproPilot 不包含任何无关 skill。
 

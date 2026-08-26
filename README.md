@@ -94,8 +94,14 @@ Clone or open the repository that owns the issue:
 ```bash
 git clone https://github.com/OWNER/REPOSITORY.git
 cd REPOSITORY
+git status
+git switch -c test-repro-pilot
 pi
 ```
+
+`git status` lets you check for existing uncommitted changes. `git switch -c test-repro-pilot` creates a new branch from your current commit and immediately switches to it, keeping ReproPilot's tests and possible source changes separate from your main branch. The branch name is arbitrary. This command is the clearer, branch-specific equivalent of the older `git checkout -b test-repro-pilot`.
+
+Creating a branch does not clean or discard uncommitted changes. If `git status` shows work you want to preserve, commit or stash it before running ReproPilot.
 
 Start Pi normally. Do not add `--no-skills`: it disables ReproPilot's workflow skill. ReproPilot does not include any unrelated skills.
 
