@@ -77,8 +77,9 @@ This is a learning project. Work in small vertical slices and explain non-obviou
 - Support GitHub issue URLs from `github.com`; use `GITHUB_TOKEN` when present and allow unauthenticated public issue reads.
 - Require users to enter the matching local repository before `/repro`; do not clone or change repositories automatically.
 - Support the complete Pi workflow, TUI status, session recovery, deterministic reports, optional fixes, and honest blocked outcomes.
-- TypeScript plus Vitest is the only required reproduction stack.
-- Do not add a standalone CLI, web UI, database, cloud sandbox, GitHub App, PR creation, multi-user support, or broad language support.
+- ReproPilot itself uses TypeScript and Vitest, but target repositories are not restricted by language or test framework.
+- Use each target repository's existing commands and toolchain; do not add language-specific adapters without a current need.
+- Do not add a standalone CLI, web UI, database, cloud sandbox, GitHub App, PR creation, or multi-user support.
 
 ## Change Safety
 
