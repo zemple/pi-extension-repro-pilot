@@ -40,7 +40,7 @@ Pi provides the model loop and built-in repository tools. ReproPilot adds only t
 
 ## Requirements
 
-- Node.js 20.19 or later.
+- Node.js 22.19 or later.
 - Pi Coding Agent with a model configured.
 - A local checkout of the repository that owns the issue, with the correct GitHub `origin`.
 - The dependencies and toolchain needed to run that repository locally.
@@ -82,7 +82,7 @@ pi
 Install ReproPilot once:
 
 ```bash
-pi install https://github.com/zemple/repro-pilot
+pi install npm:repro-pilot
 ```
 
 Public issues require no GitHub token. For issues you can access only after authentication, set `GITHUB_TOKEN` before starting Pi.

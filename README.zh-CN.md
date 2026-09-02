@@ -40,7 +40,7 @@ Pi 提供模型循环和内置仓库工具；ReproPilot 只增加 issue 复现�
 
 ## 使用要求
 
-- Node.js 20.19 或更高版本。
+- Node.js 22.19 或更高版本。
 - 已配置模型的 Pi Coding Agent。
 - issue 所属仓库的本地副本，并具有正确的 GitHub `origin`。
 - 目标仓库需要的依赖和本地运行环境。
@@ -82,7 +82,7 @@ pi
 然后安装一次 ReproPilot：
 
 ```bash
-pi install https://github.com/zemple/repro-pilot
+pi install npm:repro-pilot
 ```
 
 公开 issue 不需要 GitHub token。对于需要登录才能访问的 issue，请在启动 Pi 前设置 `GITHUB_TOKEN`。
