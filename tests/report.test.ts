@@ -1,225 +1,144 @@
 import { describe, expect, it } from "vitest";
-
-import { recordEvidence } from "../src/core/evidence.ts";
 import { finishRun, renderReport } from "../src/core/report.ts";
-import { createRunState, type IssueSummary, setRunPhase } from "../src/core/run-state.ts";
+import { setRunPhase } from "../src/core/run-state.ts";
+import {
+  baseline,
+  cite,
+  execution,
+  initial,
+  regressionPath,
+  reportPath,
+  verification,
+  verified,
+} from "./fixtures.ts";
 
-const issue: IssueSummary = {
-  url: "https://github.com/acme/calculator/issues/1",
-  repository: "acme/calculator",
-  number: 1,
-  title: "Calculator returns the wrong total for an empty list",
-  body: "Calling total([]) should return 0, but it currently returns NaN.",
-};
-
-function reachVerification(fixRequested: boolean) {
-  let state = createRunState("run-1", issue, { fixRequested });
-  state = setRunPhase(state, "reproduce");
-  state = recordEvidence(
-    state,
-    {
-      kind: "command",
-      purpose: "reproduction",
-      result: "observed",
-      summary: "Empty input returns NaN instead of 0",
-      command: "node reproduce.mjs",
-      exitCode: 0,
-      output: "actual=NaN expected=0",
-    },
-    "2026-08-25T12:00:00.000Z",
-  );
-  state = setRunPhase(state, "test");
-  state = recordEvidence(
-    state,
-    {
-      kind: "test",
-      purpose: "regression",
-      result: "failed",
-      summary: "Empty-list regression fails against baseline",
-      command: "npm test",
-      exitCode: 1,
-      path: "tests/calculator.test.ts",
-    },
-    "2026-08-25T12:01:00.000Z",
-  );
-
-  if (fixRequested) {
-    state = setRunPhase(state, "fix");
-    state = recordEvidence(
-      state,
-      {
-        kind: "observation",
-        purpose: "fix",
-        result: "observed",
-        summary: "Return zero for an empty input",
-        path: "src/calculator.ts",
-      },
-      "2026-08-25T12:02:00.000Z",
-    );
-  }
-
-  return setRunPhase(state, "verify");
+function fixed() {
+  return verified(verified(verification(true), "regression"), "existing");
 }
 
-function addPassingVerification(
-  state: ReturnType<typeof reachVerification>,
-  scope: "regression" | "existing",
-) {
-  return recordEvidence(
-    state,
-    {
+describe("completion", () => {
+  it("requires a current blocker instead of reusing a blocker from an earlier phase or file version", () => {
+    let state = cite(initial(), {
+      kind: "observation",
+      purpose: "diagnostic",
+      result: "blocked",
+      summary: "Missing compiler",
+    });
+    expect(() =>
+      finishRun(setRunPhase(state, "reproduce"), "blocked", "Stopped", reportPath),
+    ).toThrow();
+    state = { ...state, workspaceFingerprint: "d".repeat(64) };
+    expect(() => finishRun(state, "blocked", "Stopped", reportPath)).toThrow();
+  });
+  it.each(["changed files", "later failure"])(
+    "rejects a stale negative reproduction after %s",
+    (reason) => {
+      let state = cite(execution(setRunPhase(initial(), "reproduce"), "node repro.js", 0), {
+        kind: "command",
+        purpose: "reproduction",
+        summary: "No bug",
+        reproduction: { bugObserved: false, actual: "0", expected: "0" },
+      });
+      state =
+        reason === "changed files"
+          ? { ...state, workspaceFingerprint: "d".repeat(64) }
+          : execution(state, "node repro.js", 1, "MODULE_NOT_FOUND");
+      expect(() => finishRun(state, "not_reproduced", "No bug", reportPath)).toThrow();
+    },
+  );
+  it("finishes a fix with current regression and existing tests passing", () => {
+    expect(finishRun(fixed(), "fixed", "Fixed", reportPath).outcome).toBe("fixed");
+  });
+  it.each(["regression", "existing"] as const)(
+    "rejects an older pass when the latest %s result fails",
+    (scope) => {
+      expect(() => finishRun(verified(fixed(), scope, 1), "fixed", "Fixed", reportPath)).toThrow();
+    },
+  );
+  it("rejects a later failed execution even if the model does not record it", () => {
+    const state = execution(fixed(), "node --test regression.test.js", 1);
+    expect(() => finishRun(state, "fixed", "Fixed", reportPath)).toThrow();
+  });
+  it("requires re-verification after further code changes", () => {
+    const state = { ...fixed(), workspaceFingerprint: "d".repeat(64) };
+    expect(() => finishRun(state, "fixed", "Fixed", reportPath)).toThrow();
+    expect(
+      finishRun(verified(verified(state, "regression"), "existing"), "fixed", "Fixed", reportPath)
+        .outcome,
+    ).toBe("fixed");
+  });
+  it("does not accept a different test as the post-fix regression", () => {
+    let state = verified(verification(true), "existing");
+    state = cite(execution(state, "node --test unrelated.test.js"), {
       kind: "test",
       purpose: "verification",
-      verificationScope: scope,
-      result: "passed",
-      summary: scope === "regression" ? "Regression test passes" : "Existing tests pass",
-      command: scope === "regression" ? "npm test -- -t empty" : "npm test",
-      exitCode: 0,
-    },
-    scope === "regression" ? "2026-08-25T12:03:00.000Z" : "2026-08-25T12:04:00.000Z",
-  );
-}
-
-describe("finishRun", () => {
-  it("finishes a reproduction-only run after existing tests are verified", () => {
-    let state = reachVerification(false);
-    state = addPassingVerification(state, "existing");
-
-    const finished = finishRun(
-      state,
-      "reproduced",
-      "The empty-list bug is reproducible.",
-      ".repro-pilot/runs/run-1/report.md",
-    );
-
-    expect(finished).toMatchObject({
-      phase: "report",
-      outcome: "reproduced",
-      finalSummary: "The empty-list bug is reproducible.",
-      reportPath: ".repro-pilot/runs/run-1/report.md",
+      verificationScope: "regression",
+      path: regressionPath,
+      summary: "Different test",
     });
+    expect(() => finishRun(state, "fixed", "Fixed", reportPath)).toThrow();
   });
-
-  it("requires regression and existing tests to pass before declaring a fix", () => {
-    let state = reachVerification(true);
-    state = addPassingVerification(state, "regression");
-
-    expect(() => finishRun(state, "fixed", "Fixed.", ".repro-pilot/runs/run-1/report.md")).toThrow(
-      "Fixed runs require passing regression and existing-test verification evidence",
-    );
-
-    state = addPassingVerification(state, "existing");
-    expect(finishRun(state, "fixed", "Fixed.", ".repro-pilot/runs/run-1/report.md").outcome).toBe(
-      "fixed",
-    );
+  it("requires both scopes and refuses evidence-free success", () => {
+    expect(() =>
+      finishRun(verified(verification(true), "regression"), "fixed", "Fixed", reportPath),
+    ).toThrow();
+    expect(() => finishRun(initial(), "fixed", "Fixed", reportPath)).toThrow();
   });
-
-  it("does not accept observations as passing verification tests", () => {
-    let state = reachVerification(true);
-    for (const verificationScope of ["regression", "existing"] as const) {
-      state = recordEvidence(
-        state,
-        {
-          kind: "observation",
-          purpose: "verification",
-          verificationScope,
-          result: "passed",
-          summary: `${verificationScope} supposedly passes`,
-        },
-        "2026-08-25T12:03:00.000Z",
-      );
-    }
-
-    expect(() => finishRun(state, "fixed", "Fixed.", "report.md")).toThrow(
-      "Fixed runs require passing regression and existing-test verification evidence",
-    );
+  it("labels reproduction-only runs only when the regression still fails and existing tests pass", () => {
+    const state = verified(verified(verification(), "regression", 1), "existing");
+    expect(finishRun(state, "reproduced", "Reproduced", reportPath).outcome).toBe("reproduced");
+    expect(() =>
+      finishRun(verified(state, "regression"), "reproduced", "Reproduced", reportPath),
+    ).toThrow();
+    expect(() => finishRun(fixed(), "reproduced", "Reproduced", reportPath)).toThrow();
   });
-
-  it("requires positive executable reproduction evidence for successful outcomes", () => {
-    let state = reachVerification(false);
-    state = addPassingVerification(state, "existing");
-    state = {
-      ...state,
-      evidence: state.evidence.map((item) =>
-        item.purpose === "reproduction"
-          ? { ...item, result: "failed" as const, exitCode: 1 }
-          : item,
-      ),
-    };
-
-    expect(() => finishRun(state, "reproduced", "Done.", "report.md")).toThrow(
-      "Successful runs require positive executable reproduction evidence",
+  it("distinguishes a completed no-bug attempt from missing dependencies", () => {
+    let state = setRunPhase(initial(), "reproduce");
+    state = cite(execution(state, "node repro.js", 0, "actual=0 expected=0"), {
+      kind: "command",
+      purpose: "reproduction",
+      summary: "No bug",
+      reproduction: { bugObserved: false, actual: "0", expected: "0" },
+    });
+    expect(finishRun(state, "not_reproduced", "No bug observed", reportPath).outcome).toBe(
+      "not_reproduced",
     );
+    expect(() => setRunPhase(state, "test")).toThrow();
+    expect(() =>
+      cite(execution(setRunPhase(initial(), "reproduce"), "node missing.js", 1), {
+        kind: "command",
+        purpose: "reproduction",
+        summary: "Missing dependency",
+        reproduction: { bugObserved: false, actual: "Module not found", expected: "0" },
+      }),
+    ).toThrow();
+    expect(() => finishRun(baseline(), "not_reproduced", "No bug", reportPath)).toThrow();
   });
-
-  it("cannot change the outcome of an already finished run", () => {
-    let state = reachVerification(false);
-    state = addPassingVerification(state, "existing");
-    state = finishRun(state, "reproduced", "Reproduced.", "report.md");
-
-    expect(() => finishRun(state, "blocked", "Changed.", "report.md")).toThrow(
-      "Run is already finished",
-    );
+  it("requires explicit blockers and preserves their explanation", () => {
+    expect(() => finishRun(initial(), "blocked", "Stopped", reportPath)).toThrow();
+    const state = cite(initial(), {
+      kind: "observation",
+      purpose: "diagnostic",
+      result: "blocked",
+      summary: "Missing compiler",
+    });
+    const finished = finishRun(state, "blocked", "Compiler unavailable", reportPath);
+    expect(renderReport(finished)).toContain("Missing compiler");
+    expect(() => finishRun(finished, "blocked", "Again", reportPath)).toThrow();
   });
-
-  it("allows an honestly blocked run to report early", () => {
-    let state = createRunState("run-1", issue);
-    state = recordEvidence(
-      state,
-      {
-        kind: "observation",
-        purpose: "diagnostic",
-        result: "blocked",
-        summary: "Target repository is not the current checkout",
-      },
-      "2026-08-25T12:00:00.000Z",
-    );
-
-    expect(
-      finishRun(state, "blocked", "The target source is unavailable.", "report.md"),
-    ).toMatchObject({ phase: "report", outcome: "blocked" });
+  it("validates summaries and report locations", () => {
+    expect(() => finishRun(fixed(), "fixed", " ", reportPath)).toThrow();
+    expect(() => finishRun(fixed(), "fixed", "Fixed", "../report.md")).toThrow();
   });
-
-  it("rejects a success outcome without evidence", () => {
-    const state = createRunState("run-1", issue);
-
-    expect(() => finishRun(state, "reproduced", "Done.", "report.md")).toThrow(
-      "Reproduced runs must finish verification",
-    );
-  });
-
-  it("rejects a not-reproduced outcome without a failed reproduction attempt", () => {
-    const state = createRunState("run-1", issue);
-
-    expect(() => finishRun(state, "not_reproduced", "Not reproduced.", "report.md")).toThrow(
-      "Not-reproduced runs require a failed or blocked reproduction attempt",
-    );
-  });
-});
-
-describe("renderReport", () => {
-  it("renders a deterministic report from structured fixed state", () => {
-    let state = reachVerification(true);
-    state = addPassingVerification(state, "regression");
-    state = addPassingVerification(state, "existing");
-    state = finishRun(state, "fixed", "Empty lists now return zero.", "report.md");
-
+  it("renders deterministic execution links, comparison and baseline metadata", () => {
+    const state = finishRun(fixed(), "fixed", "Fixed empty input", reportPath);
     const report = renderReport(state);
-
-    expect(report).toContain("# ReproPilot Report");
+    expect(report).toBe(renderReport(state));
     expect(report).toContain("**Outcome:** fixed");
-    expect(report).toContain("## Reproduction");
-    expect(report).toContain("## Regression Test");
-    expect(report).toContain("## Fix");
-    expect(report).toContain("## Verification");
-    expect(report).toContain("### E1 — reproduction / observed");
-    expect(report).toContain("`node reproduce.mjs`");
-    expect(report).toContain("actual=NaN expected=0");
-  });
-
-  it("refuses to render an unfinished state", () => {
-    expect(() => renderReport(createRunState("run-1", issue))).toThrow(
-      "Only a finished run can be rendered",
-    );
+    expect(report).toContain("Execution: call-1");
+    expect(report).toContain("Actual: NaN");
+    expect(report).toContain("Expected: 0");
+    expect(report).toContain("**Baseline commit:**");
+    expect(() => renderReport(initial())).toThrow();
   });
 });

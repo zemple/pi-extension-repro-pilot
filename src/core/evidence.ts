@@ -11,14 +11,31 @@ export type EvidencePurpose =
 export type EvidenceResult = "passed" | "failed" | "observed" | "blocked";
 export type VerificationScope = "regression" | "existing";
 
+export interface ReproductionComparison {
+  bugObserved: boolean;
+  actual: string;
+  expected: string;
+}
+
+// Only the adapter creates executions, from Pi tool events. The model references their IDs.
+export interface Execution {
+  id: string;
+  phase: RunPhase;
+  command: string;
+  exitCode: number | null;
+  output: string;
+  recordedAt: string;
+  workspaceBefore: string;
+  workspaceAfter: string;
+}
+
 export interface EvidenceInput {
   kind: EvidenceKind;
   purpose: EvidencePurpose;
-  result: EvidenceResult;
   summary: string;
-  command?: string;
-  exitCode?: number;
-  output?: string;
+  result?: EvidenceResult;
+  executionId?: string;
+  reproduction?: ReproductionComparison;
   path?: string;
   verificationScope?: VerificationScope;
 }
@@ -27,24 +44,26 @@ export interface Evidence extends EvidenceInput {
   id: string;
   phase: RunPhase;
   recordedAt: string;
+  result: EvidenceResult;
+  workspaceFingerprint: string;
+  command?: string;
+  exitCode?: number;
+  output?: string;
 }
 
-const maxSummaryLength = 500;
-const maxCommandLength = 1000;
-const maxPathLength = 1000;
-const maxOutputLength = 4000;
-
-const evidenceKinds: readonly EvidenceKind[] = ["command", "test", "observation"];
-const evidencePurposes: readonly EvidencePurpose[] = [
+export const phases = ["triage", "reproduce", "test", "fix", "verify", "report"] as const;
+export const evidenceKinds = ["command", "test", "observation"] as const;
+export const evidencePurposes = [
   "environment",
   "reproduction",
   "regression",
   "fix",
   "verification",
   "diagnostic",
-];
-const evidenceResults: readonly EvidenceResult[] = ["passed", "failed", "observed", "blocked"];
-const verificationScopes: readonly VerificationScope[] = ["regression", "existing"];
+] as const;
+export const evidenceResults = ["passed", "failed", "observed", "blocked"] as const;
+export const verificationScopes = ["regression", "existing"] as const;
+export const maximumCommandLength = 16_000;
 const requiredPhaseByPurpose: Partial<Record<EvidencePurpose, RunPhase>> = {
   reproduction: "reproduce",
   regression: "test",
@@ -52,125 +71,96 @@ const requiredPhaseByPurpose: Partial<Record<EvidencePurpose, RunPhase>> = {
   verification: "verify",
 };
 
-function redact(value: string): string {
-  return value
+export function sanitizeText(value: string, maximum: number): string {
+  const redacted = value
     .replace(/\b(?:ghp_|github_pat_)[A-Za-z0-9_]+\b/gu, "[REDACTED]")
     .replace(/(Authorization:\s*Bearer\s+)\S+/giu, "$1[REDACTED]")
     .replace(
       /\b([A-Z][A-Z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD)[A-Z0-9_]*)=([^\s]+)/gu,
       "$1=[REDACTED]",
     );
-}
-
-function bound(value: string, maximum: number): string {
-  const redacted = redact(value);
-  if (redacted.length <= maximum) {
-    return redacted;
-  }
-
-  const omitted = redacted.length - maximum;
-  const marker = `\n...[truncated ${omitted} characters]...\n`;
+  if (redacted.length <= maximum) return redacted;
+  const marker = "\n...[truncated]...\n";
   const available = maximum - marker.length;
-  const headLength = Math.ceil(available / 2);
-  const tailLength = Math.floor(available / 2);
-  return `${redacted.slice(0, headLength)}${marker}${redacted.slice(-tailLength)}`;
+  return `${redacted.slice(0, Math.ceil(available / 2))}${marker}${redacted.slice(-Math.floor(available / 2))}`;
 }
 
-function optionalBounded(value: string | undefined, maximum: number): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  return bound(value, maximum);
+export function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+function text(value: unknown, maximum: number): value is string {
+  return typeof value === "string" && value.trim().length > 0 && value.length <= maximum;
 }
 
-function executableResultAgrees(
-  kind: EvidenceKind,
-  result: EvidenceResult,
-  exitCode: number | undefined,
-): boolean {
-  if (kind === "observation") return true;
-  if (result === "passed") return exitCode === 0;
-  if (result === "failed") return exitCode !== 0;
-  return true;
+function comparisonValid(value: unknown): value is ReproductionComparison {
+  return (
+    isObject(value) &&
+    typeof value.bugObserved === "boolean" &&
+    text(value.actual, 1000) &&
+    text(value.expected, 1000) &&
+    (!value.bugObserved || value.actual.trim() !== value.expected.trim())
+  );
 }
 
-export function sanitizeText(value: string, maximum: number): string {
-  return bound(value, maximum);
+export function isExecution(value: unknown): value is Execution {
+  return (
+    isObject(value) &&
+    text(value.id, 200) &&
+    Object.keys(value).every((key) =>
+      [
+        "id",
+        "phase",
+        "command",
+        "exitCode",
+        "output",
+        "recordedAt",
+        "workspaceBefore",
+        "workspaceAfter",
+      ].includes(key),
+    ) &&
+    phases.some((phase) => phase === value.phase && phase !== "report") &&
+    text(value.command, maximumCommandLength) &&
+    (value.exitCode === null ||
+      (Number.isInteger(value.exitCode) &&
+        Number(value.exitCode) >= 0 &&
+        Number(value.exitCode) <= 255)) &&
+    typeof value.output === "string" &&
+    value.output.length <= 4000 &&
+    text(value.recordedAt, 40) &&
+    !Number.isNaN(Date.parse(value.recordedAt)) &&
+    text(value.workspaceBefore, 200) &&
+    /^[a-f0-9]{64}$/u.test(value.workspaceBefore) &&
+    text(value.workspaceAfter, 200) &&
+    /^[a-f0-9]{64}$/u.test(value.workspaceAfter) &&
+    sanitizeText(value.command, maximumCommandLength) === value.command &&
+    sanitizeText(value.output, 4000) === value.output
+  );
 }
 
-export function isEvidence(value: unknown): value is Evidence {
-  if (!isObject(value)) return false;
-  if (typeof value.id !== "string" || !/^E[1-9]\d*$/u.test(value.id)) return false;
-  if (
-    typeof value.phase !== "string" ||
-    !["triage", "reproduce", "test", "fix", "verify", "report"].includes(value.phase)
-  ) {
-    return false;
-  }
-  if (typeof value.recordedAt !== "string" || Number.isNaN(Date.parse(value.recordedAt))) {
-    return false;
-  }
-  if (
-    typeof value.kind !== "string" ||
-    !evidenceKinds.includes(value.kind as EvidenceKind) ||
-    typeof value.purpose !== "string" ||
-    !evidencePurposes.includes(value.purpose as EvidencePurpose) ||
-    typeof value.result !== "string" ||
-    !evidenceResults.includes(value.result as EvidenceResult) ||
-    typeof value.summary !== "string" ||
-    value.summary.length === 0 ||
-    value.summary.length > maxSummaryLength
-  ) {
-    return false;
-  }
-  if (
-    (value.kind === "command" || value.kind === "test") &&
-    (typeof value.command !== "string" || !value.command || !Number.isInteger(value.exitCode))
-  ) {
-    return false;
-  }
-  if (
-    value.command !== undefined &&
-    (typeof value.command !== "string" || value.command.length > maxCommandLength)
-  ) {
-    return false;
-  }
-  if (
-    value.output !== undefined &&
-    (typeof value.output !== "string" || value.output.length > maxOutputLength)
-  ) {
-    return false;
-  }
-  if (
-    value.path !== undefined &&
-    (typeof value.path !== "string" || value.path.length > maxPathLength)
-  ) {
-    return false;
-  }
-  if (value.exitCode !== undefined && !Number.isInteger(value.exitCode)) return false;
-  if (
-    !executableResultAgrees(
-      value.kind as EvidenceKind,
-      value.result as EvidenceResult,
-      value.exitCode as number | undefined,
-    )
-  ) {
-    return false;
-  }
-  if (
-    value.verificationScope !== undefined &&
-    (typeof value.verificationScope !== "string" ||
-      !verificationScopes.includes(value.verificationScope as VerificationScope))
-  ) {
-    return false;
-  }
-  const requiredPhase = requiredPhaseByPurpose[value.purpose as EvidencePurpose];
-  if (requiredPhase !== undefined && value.phase !== requiredPhase) return false;
-  return true;
+export function assertActive(state: RunState): void {
+  if (state.phase === "report" || state.outcome !== "in_progress")
+    throw new Error("Run is already finished");
+}
+
+export function recordExecution(state: RunState, execution: Execution): RunState {
+  assertActive(state);
+  if (execution.command.length > maximumCommandLength)
+    throw new Error("Command is too long to record exactly");
+  execution = {
+    ...execution,
+    command: sanitizeText(execution.command, maximumCommandLength),
+    output: sanitizeText(execution.output, 4000),
+  };
+  if (!isExecution(execution) || execution.phase !== state.phase)
+    throw new Error("Invalid execution record");
+  if (state.executions.some((item) => item.id === execution.id))
+    throw new Error("Duplicate execution ID");
+  return {
+    ...state,
+    workspaceFingerprint: execution.workspaceAfter,
+    executions: [...state.executions, execution],
+  };
 }
 
 export function recordEvidence(
@@ -178,61 +168,101 @@ export function recordEvidence(
   input: EvidenceInput,
   recordedAt: string,
 ): RunState {
-  const summary = input.summary.trim();
-  if (!summary) {
-    throw new Error("Evidence summary is required");
-  }
-
-  if (
-    (input.kind === "command" || input.kind === "test") &&
-    (!input.command?.trim() || !Number.isInteger(input.exitCode))
-  ) {
-    throw new Error("Command and test evidence require a command and integer exit code");
-  }
-
-  if (!executableResultAgrees(input.kind, input.result, input.exitCode)) {
-    throw new Error("Executable evidence result must agree with its exit code");
-  }
-
-  if (Number.isNaN(Date.parse(recordedAt))) {
-    throw new Error("Evidence timestamp must be an ISO date string");
-  }
-
+  assertActive(state);
+  if (!evidenceKinds.includes(input.kind) || !evidencePurposes.includes(input.purpose))
+    throw new Error("Invalid evidence kind or purpose");
+  if (!input.summary?.trim()) throw new Error("Evidence summary is required");
+  if (Number.isNaN(Date.parse(recordedAt))) throw new Error("Invalid evidence timestamp");
   const requiredPhase = requiredPhaseByPurpose[input.purpose];
-  if (requiredPhase !== undefined && state.phase !== requiredPhase) {
-    const label = input.purpose[0]?.toUpperCase() + input.purpose.slice(1);
-    throw new Error(`${label} evidence must be recorded during ${requiredPhase}`);
+  if (requiredPhase && state.phase !== requiredPhase)
+    throw new Error(`${input.purpose} evidence must be recorded during ${requiredPhase}`);
+  if (
+    input.verificationScope !== undefined &&
+    !verificationScopes.includes(input.verificationScope)
+  )
+    throw new Error("Invalid verification scope");
+  if (input.purpose === "verification" && (input.kind !== "test" || !input.verificationScope))
+    throw new Error("Verification requires a test and scope");
+  if (input.purpose === "regression" && input.kind !== "test")
+    throw new Error("Regression evidence requires a test");
+  if (
+    (input.purpose === "regression" || input.verificationScope === "regression") &&
+    !input.path?.trim()
+  )
+    throw new Error("Regression test path is required");
+  if (
+    input.reproduction !== undefined &&
+    (input.purpose !== "reproduction" || !comparisonValid(input.reproduction))
+  )
+    throw new Error("Invalid actual/expected comparison");
+  let execution: Execution | undefined;
+  let result = input.result;
+  if (input.kind === "observation") {
+    if (input.executionId || input.purpose === "reproduction")
+      throw new Error("Reproduction requires executable evidence");
+    if (result !== "observed" && result !== "blocked")
+      throw new Error("Observations must be observed or blocked");
+  } else {
+    execution = state.executions.find((item) => item.id === input.executionId);
+    if (!execution || execution.exitCode === null)
+      throw new Error("Reference an observed execution with a known exit code");
+    if (
+      execution.phase !== state.phase ||
+      execution.workspaceBefore !== execution.workspaceAfter ||
+      execution.workspaceAfter !== state.workspaceFingerprint
+    )
+      throw new Error(
+        "Execution is stale, changed the workspace, or belongs to another phase; run the command again",
+      );
+    const latest = [...state.executions]
+      .reverse()
+      .find((item) => item.command === execution?.command);
+    if (latest?.id !== execution.id) throw new Error("A newer execution exists; use its result");
+    if (state.evidence.some((item) => item.executionId === execution?.id))
+      throw new Error("Execution has already been recorded as evidence");
+    result = execution.exitCode === 0 ? "passed" : "failed";
+    if (input.result !== undefined && input.result !== result)
+      throw new Error("Execution result is determined by Pi, not the model");
+    if (input.purpose === "reproduction" && !comparisonValid(input.reproduction))
+      throw new Error("Reproduction requires actual, expected, and bugObserved");
+    if (input.reproduction?.bugObserved === false && execution.exitCode !== 0)
+      throw new Error(
+        "A failed command cannot establish that the bug is absent; record a blocker instead",
+      );
   }
-
+  if (!result) throw new Error("Evidence result is required");
   const evidence: Evidence = {
     id: `E${state.evidence.length + 1}`,
     phase: state.phase,
     recordedAt,
     kind: input.kind,
     purpose: input.purpose,
-    result: input.result,
-    summary: bound(summary, maxSummaryLength),
+    result,
+    summary: sanitizeText(input.summary.trim(), 500),
+    workspaceFingerprint: state.workspaceFingerprint,
   };
-
-  const command = optionalBounded(input.command?.trim(), maxCommandLength);
-  const output = optionalBounded(input.output, maxOutputLength);
-  const path = optionalBounded(input.path?.trim(), maxPathLength);
-  if (command !== undefined) evidence.command = command;
-  if (input.exitCode !== undefined) evidence.exitCode = input.exitCode;
-  if (output !== undefined) evidence.output = output;
-  if (path !== undefined) evidence.path = path;
-  if (input.verificationScope !== undefined) {
-    evidence.verificationScope = input.verificationScope;
+  if (execution) {
+    evidence.executionId = execution.id;
+    evidence.command = execution.command;
+    evidence.exitCode = execution.exitCode as number;
+    evidence.output = execution.output;
   }
-
+  if (input.path !== undefined) evidence.path = sanitizeText(input.path.trim(), 1000);
+  if (input.verificationScope !== undefined) evidence.verificationScope = input.verificationScope;
+  if (input.reproduction)
+    evidence.reproduction = {
+      bugObserved: input.reproduction.bugObserved,
+      actual: sanitizeText(input.reproduction.actual.trim(), 1000),
+      expected: sanitizeText(input.reproduction.expected.trim(), 1000),
+    };
   return { ...state, evidence: [...state.evidence, evidence] };
 }
 
 export function isPositiveReproductionEvidence(evidence: Evidence): boolean {
   return (
     evidence.purpose === "reproduction" &&
-    (evidence.kind === "command" || evidence.kind === "test") &&
-    (evidence.result === "observed" || evidence.result === "passed")
+    evidence.kind !== "observation" &&
+    evidence.reproduction?.bugObserved === true
   );
 }
 
@@ -264,31 +294,44 @@ export function isPassingVerificationEvidence(
   );
 }
 
+export function latestVerification(
+  state: RunState,
+  scope: VerificationScope,
+): Evidence | undefined {
+  const candidates = state.evidence.filter(
+    (item) => item.purpose === "verification" && item.verificationScope === scope,
+  );
+  // Execution order, not the order in which the model chooses to cite results.
+  const latest = candidates.sort(
+    (a, b) =>
+      state.executions.findIndex((item) => item.id === b.executionId) -
+      state.executions.findIndex((item) => item.id === a.executionId),
+  )[0];
+  if (!latest || latest.workspaceFingerprint !== state.workspaceFingerprint) return undefined;
+  const latestExecution = [...state.executions]
+    .reverse()
+    .find((item) => item.command === latest.command);
+  return latestExecution &&
+    latestExecution.exitCode === latest.exitCode &&
+    latestExecution.workspaceBefore === latestExecution.workspaceAfter &&
+    latestExecution.workspaceAfter === state.workspaceFingerprint
+    ? latest
+    : undefined;
+}
+
 export function getRegressionStatus(
   state: RunState,
 ): "not_started" | "failing" | "passing" | "blocked" {
-  const findLastMatching = (predicate: (item: Evidence) => boolean): Evidence | undefined => {
-    for (let index = state.evidence.length - 1; index >= 0; index -= 1) {
-      const item = state.evidence[index];
-      if (item && predicate(item)) return item;
-    }
-    return undefined;
-  };
-  const regressionVerification = findLastMatching(
-    (item) => item.purpose === "verification" && item.verificationScope === "regression",
-  );
+  const verification = latestVerification(state, "regression");
+  if (verification)
+    return isPassingVerificationEvidence(verification, "regression") ? "passing" : "failing";
   if (
-    regressionVerification &&
-    isPassingVerificationEvidence(regressionVerification, "regression")
-  ) {
-    return "passing";
-  }
-  if (regressionVerification?.result === "blocked") return "blocked";
-
-  const baseline = findLastMatching((item) => item.purpose === "regression");
-  if (baseline && isFailedRegressionEvidence(baseline)) return "failing";
-  if (baseline?.result === "blocked") return "blocked";
-  return "not_started";
+    state.evidence.some(
+      (item) => item.purpose === "verification" && item.verificationScope === "regression",
+    )
+  )
+    return "blocked";
+  return state.evidence.some(isFailedRegressionEvidence) ? "failing" : "not_started";
 }
 
 export function getFixStatus(state: RunState): "not_started" | "applied" {

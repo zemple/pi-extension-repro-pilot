@@ -4,6 +4,7 @@ import {
   isPassingVerificationEvidence,
   isPositiveFixEvidence,
   isPositiveReproductionEvidence,
+  latestVerification,
   sanitizeText,
 } from "./evidence.ts";
 import type { RunOutcome, RunState } from "./run-state.ts";
@@ -30,54 +31,78 @@ export function finishRun(
 
   const hasReproduction = state.evidence.some(isPositiveReproductionEvidence);
   const hasRegressionFailure = state.evidence.some(isFailedRegressionEvidence);
-  const regressionPassed = state.evidence.some((item) =>
-    isPassingVerificationEvidence(item, "regression"),
-  );
-  const existingPassed = state.evidence.some((item) =>
-    isPassingVerificationEvidence(item, "existing"),
-  );
+  const regression = latestVerification(state, "regression");
+  const existing = latestVerification(state, "existing");
+  const baseline = [...state.evidence].reverse().find(isFailedRegressionEvidence);
+  const sameRegression =
+    regression &&
+    baseline &&
+    regression.path === baseline.path &&
+    regression.command === baseline.command;
+  const existingPassed = existing && isPassingVerificationEvidence(existing, "existing");
+  if (reportPath !== `.repro-pilot/runs/${state.runId}/report.md`)
+    throw new Error("Invalid report path for this run");
 
   if (outcome === "blocked") {
-    if (!hasEvidence(state, (item) => item.result === "blocked")) {
-      throw new Error("Blocked runs require blocked evidence");
-    }
-  } else if (outcome === "not_reproduced") {
     if (
       !hasEvidence(
         state,
         (item) =>
-          item.purpose === "reproduction" &&
-          (item.kind === "command" || item.kind === "test") &&
-          (item.result === "failed" || item.result === "blocked"),
+          item.result === "blocked" &&
+          item.phase === state.phase &&
+          item.workspaceFingerprint === state.workspaceFingerprint,
       )
-    ) {
-      throw new Error("Not-reproduced runs require a failed or blocked reproduction attempt");
-    }
-  } else if (outcome === "reproduced") {
-    if (state.phase !== "verify") {
-      throw new Error("Reproduced runs must finish verification");
-    }
-    if (!hasReproduction) {
-      throw new Error("Successful runs require positive executable reproduction evidence");
-    }
-    if (!hasRegressionFailure) {
-      throw new Error("Successful runs require a failing baseline regression test");
-    }
-    if (!existingPassed) {
-      throw new Error("Successful runs require passing existing-test verification evidence");
-    }
-  } else {
-    if (state.phase !== "verify") throw new Error("Fixed runs must finish verification");
-    if (!hasReproduction || !hasRegressionFailure) {
-      throw new Error("Fixed runs require reproduction and a failing baseline regression test");
-    }
-    if (!regressionPassed || !existingPassed) {
-      throw new Error(
-        "Fixed runs require passing regression and existing-test verification evidence",
+    )
+      throw new Error("Blocked runs require a current blocker on the current workspace");
+  } else if (outcome === "not_reproduced") {
+    const negative = state.evidence.some((item) => {
+      const latest = [...state.executions]
+        .reverse()
+        .find((execution) => execution.command === item.command);
+      return (
+        item.purpose === "reproduction" &&
+        item.reproduction?.bugObserved === false &&
+        item.exitCode === 0 &&
+        item.workspaceFingerprint === state.workspaceFingerprint &&
+        latest?.id === item.executionId
       );
-    }
-    if (!state.fixRequested || !state.evidence.some(isPositiveFixEvidence)) {
-      throw new Error("Fixed runs require a requested fix and fix evidence");
+    });
+    if (state.phase !== "reproduce" || !negative || hasReproduction)
+      throw new Error(
+        "Not-reproduced runs require a completed no-bug reproduction, without positive reproduction evidence",
+      );
+  } else {
+    if (state.phase !== "verify") throw new Error("Successful runs must finish verification");
+    if (!hasReproduction || !hasRegressionFailure)
+      throw new Error(
+        "Successful runs require reproduction and a failing baseline regression test",
+      );
+    if (!existingPassed || !sameRegression)
+      throw new Error(
+        "Successful runs require current regression and existing-test verification evidence",
+      );
+    if (outcome === "reproduced") {
+      if (state.fixRequested || state.evidence.some(isPositiveFixEvidence))
+        throw new Error("A fix-enabled run cannot finish as reproduction only");
+      if (
+        regression.result !== "failed" ||
+        baseline.workspaceFingerprint !== state.workspaceFingerprint
+      )
+        throw new Error("Reproduction-only verification must still fail on the unchanged baseline");
+    } else {
+      if (!isPassingVerificationEvidence(regression, "regression"))
+        throw new Error(
+          "Fixed runs require passing regression and existing-test verification evidence",
+        );
+      if (
+        !state.fixRequested ||
+        !state.evidence.some(isPositiveFixEvidence) ||
+        !state.fixBaselineFingerprint ||
+        state.fixBaselineFingerprint === state.workspaceFingerprint
+      )
+        throw new Error(
+          "Fixed runs require a requested fix, fix evidence, and an actual workspace change",
+        );
     }
   }
 
@@ -104,6 +129,13 @@ function renderEvidenceDetails(evidence: Evidence): string {
     `- Recorded: ${evidence.recordedAt}`,
     `- Summary: ${evidence.summary}`,
   ];
+  if (evidence.executionId) lines.push(`- Execution: ${evidence.executionId}`);
+  if (evidence.reproduction)
+    lines.push(
+      `- Bug observed: ${evidence.reproduction.bugObserved ? "yes" : "no"}`,
+      `- Actual: ${evidence.reproduction.actual}`,
+      `- Expected: ${evidence.reproduction.expected}`,
+    );
   if (evidence.path) lines.push(`- Path: \`${evidence.path}\``);
   if (evidence.command) lines.push(`- Command: \`${evidence.command.replaceAll("`", "\\`")}\``);
   if (evidence.exitCode !== undefined) lines.push(`- Exit code: ${evidence.exitCode}`);
@@ -125,6 +157,8 @@ export function renderReport(state: RunState): string {
     `**Issue:** ${state.issue.repository}#${state.issue.number} — ${state.issue.title}`,
     `**Source:** ${state.issue.url}`,
     `**Outcome:** ${state.outcome}`,
+    `**Baseline commit:** ${state.workspace.head}`,
+    `**Workspace fingerprint:** ${state.workspaceFingerprint}`,
     `**Fix requested:** ${state.fixRequested ? "yes" : "no"}`,
     "",
     "## Summary",

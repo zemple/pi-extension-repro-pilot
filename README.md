@@ -23,11 +23,13 @@ Load issue → Triage → Reproduce → Add a failing regression test
                     With --fix: repair → verify → report
 ```
 
-Reading code is not proof of reproduction. ReproPilot requires evidence from executed commands or tests.
+Reading code is not proof of reproduction. ReproPilot records real Pi bash executions and lets the model cite their execution IDs. The model describes actual versus expected behavior; it cannot submit its own command output or exit code as execution evidence.
+
+Tests must verify the current files. Later failures or file edits invalidate older passing results. An interrupted command is treated as unknown, not as a pass.
 
 ## Architecture
 
-ReproPilot is a Pi package with four small layers:
+ReproPilot is a Pi package with the following components:
 
 | Path | Responsibility |
 | --- | --- |
@@ -35,6 +37,7 @@ ReproPilot is a Pi package with four small layers:
 | `skills/repro-workflow/` | Gives the model the step-by-step reproduction procedure |
 | `src/core/` | Enforces workflow state, evidence rules, persistence validation, and report generation without depending on Pi |
 | `src/github.ts` | Loads and validates the GitHub issue and verifies the current repository |
+| `src/workspace.ts` | Records the Git baseline and detects repository file changes |
 
 Pi provides the model loop and built-in repository tools. ReproPilot adds only the issue-reproduction workflow and its deterministic evidence gates.
 
@@ -123,10 +126,11 @@ The issue repository must match the current repository's GitHub `origin`. ReproP
 Pi shows a status such as:
 
 ```text
-repro:triage evidence:0 test:not_started fix:not_started
+repro:triage outcome:in_progress evidence:0 test:not_started fix:not_started
 ```
 
 - `repro`: current workflow phase.
+- `outcome`: current or final result.
 - `evidence`: number of recorded evidence items.
 - `test`: regression test status.
 - `fix`: fix status.
@@ -159,9 +163,17 @@ The final report is written inside the target repository:
 
 Read `Outcome` and `Verification` first. Use `Evidence Details` when you need the exact command, exit code, and relevant output behind a conclusion. Evidence items are numbered `E1`, `E2`, and so on.
 
+## Recovery and failed saves
+
+ReproPilot restores valid checkpoints on the current Pi session branch and checks the repository again before resuming work. Completed runs are frozen. Finish the current run before starting another `/repro`.
+
+If saving session state fails, restart Pi before continuing. If writing the report fails, the run remains unfinished and can be retried. Older schema-v1 checkpoints do not contain execution records; start a new run rather than treating those old claims as verified evidence.
+
 ## Current limits
 
 - Accepts issue URLs from `github.com` only.
 - Requires the user to open the matching local repository first.
 - Requires the target project's dependencies and tests to run locally.
+- Requires a committed Git HEAD. Repository snapshots cover tracked and non-ignored untracked files; submodules and special files are currently rejected.
+- Commands that create or modify repository files need to be re-run after the files stabilize before their results can be used as test evidence.
 - Provides no cloud sandbox and does not automatically commit, push, or open a pull request.

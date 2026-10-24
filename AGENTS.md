@@ -29,9 +29,11 @@ This is a learning project. Work in small vertical slices and explain non-obviou
 
 - `src/core/` owns framework-independent state, evidence, persistence, completion, and reporting logic. It must not import Pi packages.
 - `src/github.ts` owns GitHub issue URL parsing, REST loading, response validation, and current-repository preflight.
+- `src/workspace.ts` owns Git root/HEAD discovery and content fingerprints of tracked and non-ignored untracked files, excluding generated `.repro-pilot` artifacts. Fingerprints include file content, deletion, permissions, and symlink targets; they do not rely on Git's dirty flag.
 - `extensions/` adapts the core to public `@earendil-works/pi-coding-agent` APIs.
 - Do not import `@earendil-works/pi-agent-core` directly unless a requirement recorded in this file cannot be met by Pi Coding Agent.
 - Reuse Pi's built-in repository tools. Do not wrap or replace `read`, `bash`, `edit`, or `write`.
+- Use public `tool_call`/`tool_result` hooks to observe bash executions. The adapter adds a per-call exit-status receipt to bash command arguments; it does not register replacement tool implementations. This is required because Pi 0.84.4 does not expose a structured bash exit code and can return a successful tool result for a signal-terminated shell.
 - Workflow validity belongs in `src/core/`. `skills/repro-workflow/SKILL.md` explains procedure but must not define or duplicate completion gates.
 - Keep one canonical workflow implementation for the Pi package and any later CLI.
 
@@ -39,13 +41,25 @@ This is a learning project. Work in small vertical slices and explain non-obviou
 
 - The runtime is model-driven, but phase transitions, evidence validity, and completion decisions are deterministic TypeScript rules.
 - Persist versioned, validated state in Pi custom session entries. The Markdown report is a generated artifact, not the state database.
+- Current checkpoints use schema version 2. Version 1 checkpoints lack execution provenance and must not be silently upgraded into trusted evidence; notify the user to start a new run.
 - Restore only the latest valid ReproPilot entry on the current session branch and inject a compact state snapshot before model turns.
 - Treat issue text, model arguments, command output, and restored state as untrusted input.
 - Evidence is append-only, bounded, redacted, and stamped with its matching workflow phase.
 - Executed command and test evidence requires the exact command and integer exit code; its kind, result, and exit code must agree.
+- The adapter records observed executions with tool-call IDs, original commands, outputs, exit codes, phases, and before/after workspace fingerprints. Evidence references an execution ID; models cannot supply executable commands, outputs, or exit codes through the evidence tool. Missing or invalid receipts produce an unknown exit code and cannot satisfy executable gates.
+- Commands longer than 16,000 characters are rejected instead of truncated. Credentials are redacted in stored commands and output; bounded output excerpts are not full execution logs.
+- Executable evidence must refer to an unused, current-phase execution on the current stable workspace. Commands that change repository content must be re-run before their results can satisfy gates.
 - Reproduction requires executed evidence showing actual versus expected behavior. Reading code is not proof.
+- Reproduction comparisons explicitly separate `bugObserved` from command success. A completed no-bug attempt can finish as `not_reproduced`; missing dependencies and interrupted commands require an honest `blocked` explanation.
 - Regression evidence must come from a test observed failing against the baseline before a fix is applied.
+- Regression evidence identifies a test path and command. Verification must run that same regression; no-fix runs keep it failing, while fixed runs make it pass. Existing tests are verified separately.
 - A `fixed` outcome requires positive fix evidence plus passing post-fix regression and relevant existing-test evidence.
+- Completion uses the latest verification executions on the current workspace, never a historical pass. Further file changes invalidate old verification; an observed later failure of the same command invalidates a pass even if the model does not cite that failure.
+- A fix-enabled run cannot finish as `reproduced`; it must finish as `fixed` or honestly `blocked`. Entering verification after fix requires an actual workspace change in addition to fix evidence.
+- Finished runs are immutable. Recovery replays the same core evidence/transition/completion rules, checks append-only checkpoint history, and cannot grant fix authorization absent from an earlier checkpoint. Before resuming repository work, recheck the current GitHub origin and Git root.
+- Only one run and one repository mutation/save operation may be active at a time. A second `/repro` cannot replace an unfinished run. Session navigation is refused while commands or saves are pending; stale asynchronous results cannot commit into another session.
+- Reserve bash/edit/write calls from preparation through their result, including Pi's parallel tool batches. Release aborted or vetoed preparations on `tool_execution_end`; never promote them to known executable results. Preserve the user's shell errexit setting inside the original command while capturing its explicit exit receipt.
+- Update in-memory state only after the Pi custom entry is saved successfully. A persistence error halts the adapter until Pi is restarted. Reports are written by atomic rename before completion is saved; a failed completion save restores/removes the report, with an explicit error and halted state if rollback also fails.
 - Blocked and unsuccessful runs must preserve what was attempted and why work stopped; they must never fabricate success.
 
 ## TypeScript and Simplicity
@@ -79,6 +93,7 @@ This is a learning project. Work in small vertical slices and explain non-obviou
 - Support the complete Pi workflow, TUI status, session recovery, deterministic reports, optional fixes, and honest blocked outcomes.
 - ReproPilot itself uses TypeScript and Vitest, but target repositories are not restricted by language or test framework.
 - Use each target repository's existing commands and toolchain; do not add language-specific adapters without a current need.
+- Workspace snapshots require a committed Git HEAD. Submodules and special files are rejected rather than certifying an incomplete fingerprint; dependency directories ignored by Git remain outside the repository-content fingerprint.
 - Do not add a standalone CLI, web UI, database, cloud sandbox, GitHub App, PR creation, or multi-user support.
 
 ## Change Safety

@@ -27,7 +27,7 @@ ReproPilot 在本地运行，不会自动 commit、push 或创建 PR。
 
 ## 架构
 
-ReproPilot 是一个由四层组成的 Pi package：
+ReproPilot 是一个 Pi package，主要组成如下：
 
 | 路径 | 职责 |
 | --- | --- |
@@ -35,6 +35,7 @@ ReproPilot 是一个由四层组成的 Pi package：
 | `skills/repro-workflow/` | 告诉模型应该按照什么步骤复现问题 |
 | `src/core/` | 不依赖 Pi，负责工作流状态、证据规则、持久化验证和报告生成 |
 | `src/github.ts` | 加载并验证 GitHub issue，同时检查当前仓库是否匹配 |
+| `src/workspace.ts` | 记录 Git 基线，检测仓库文件内容变化 |
 
 Pi 提供模型循环和内置仓库工具；ReproPilot 只增加 issue 复现流程和由代码强制执行的证据门槛。
 
@@ -123,10 +124,11 @@ issue 所属仓库必须与当前仓库的 GitHub `origin` 一致。两者不匹
 Pi 会显示类似状态：
 
 ```text
-repro:triage evidence:0 test:not_started fix:not_started
+repro:triage outcome:in_progress evidence:0 test:not_started fix:not_started
 ```
 
 - `repro`：当前工作阶段。
+- `outcome`：当前或最终结果。
 - `evidence`：已记录的证据数量。
 - `test`：回归测试状态。
 - `fix`：修复状态。
@@ -165,3 +167,14 @@ repro:triage evidence:0 test:not_started fix:not_started
 - 需要用户提前打开匹配的本地仓库。
 - 目标项目的依赖和测试必须能够在本地运行。
 - 不提供云端隔离环境，不自动 commit、push 或创建 PR。
+
+
+## 执行记录与恢复
+
+插件现在从 Pi 的真实 bash 执行中登记命令、输出和退出码。模型通过执行编号引用这些记录，不能自行填写执行结果。报告会区分“程序正常运行但没有观察到 bug”和“缺少依赖、命令中断等阻塞”。
+
+测试通过以后，如果代码又改了，必须重新测试；后来失败的结果也不能被以前的通过记录掩盖。复现模式下，新增的回归测试应保持失败；修复模式下，同一个回归测试和原有测试都应通过。
+
+同一时间只能有一个未结束的运行。保存状态失败时，请重启 Pi 后再继续；报告写入失败时，运行保持未完成，可以重试。已经结束的运行不会再追加证据。
+
+旧的 schema-v1 存档没有真实执行记录，需要重新开始运行。当前内容快照要求 Git 已有提交，覆盖受 Git 管理及未被忽略的新文件，排除 `.repro-pilot` 生成物；暂不接受子模块和特殊文件。命令若产生文件改动，需要在文件稳定后重新执行，再将结果用作证据。
