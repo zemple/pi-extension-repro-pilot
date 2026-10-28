@@ -1,17 +1,17 @@
 {
   "name": "repro-pilot",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Evidence-driven GitHub issue reproduction and fixing workflow for Pi Coding Agent",
   "type": "module",
   "license": "MIT",
   "author": "Ze Yang",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zemple/repro-pilot.git"
+    "url": "git+https://github.com/zemple/pi-extension-repro-pilot.git"
   },
-  "homepage": "https://github.com/zemple/repro-pilot#readme",
+  "homepage": "https://github.com/zemple/pi-extension-repro-pilot#readme",
   "bugs": {
-    "url": "https://github.com/zemple/repro-pilot/issues"
+    "url": "https://github.com/zemple/pi-extension-repro-pilot/issues"
   },
   "keywords": [
     "pi-package",
